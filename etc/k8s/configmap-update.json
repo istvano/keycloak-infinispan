@@ -1,0 +1,45 @@
+{
+    "rules": [
+        {
+            "apiGroups": [
+                ""
+            ],
+            "resources": [
+                "configmaps",
+                "endpoints",
+                "pods",
+                "secrets"
+            ],
+            "verbs": [
+                "get"
+            ]
+        },
+        {
+            "apiGroups": [
+                ""
+            ],
+            "resourceNames": [
+                "ingress-controller-leader-public"
+            ],
+            "resources": [
+                "configmaps"
+            ],
+            "verbs": [
+                "create",
+                "update"
+            ]
+        },
+        {
+            "apiGroups": [
+                ""
+            ],
+            "resources": [
+                "configmaps"
+            ],
+            "verbs": [
+                "create",
+                "update"
+            ]
+        }
+    ]
+}
