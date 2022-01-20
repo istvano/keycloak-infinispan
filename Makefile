@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 # ===SETUP
 BLUE      := $(shell tput -Txterm setaf 4)
 GREEN     := $(shell tput -Txterm setaf 2)
@@ -83,10 +85,10 @@ $(eval $(call defw,CA_TLS_FILE,/etc/ssl/certs/localhost-ca.pem))
 $(eval $(call defw,CA_TLS_KEY,/etc/ssl/certs/localhost-ca-key.pem))
 $(eval $(call defw,TLS_FILE,/etc/ssl/certs/server.pem))
 $(eval $(call defw,TLS_KEY,/etc/ssl/certs/server-key.pem))
+$(eval $(call defw,TLS_CSR,/etc/ssl/certs/server.csr))
 
 MAIN_DOMAIN=$(shell echo $(DOMAINS) | awk '{print $$1}')
-SAN=$(shell echo $(DOMAINS) | sed "s/^[^ ]* //")
-
+SAN=$(shell echo $(DOMAINS) | sed 's/[^ ]* */DNS:&/g' | sed 's/\s\+/,/g') 
 
 # === END USER OPTIONS ===
 
@@ -112,8 +114,8 @@ dns/remove: ##@dns Delete dns entries
 
 ### CLUSTER
 
-.PHONY: k8s/create-namespaces
-k8s/create-namespaces: ##@cluster Create namespaces
+.PHONY: k8s/create-ns
+k8s/create-ns: ##@cluster Create namespaces
 	@echo "Creating Namespaces..."
 	@for v in $(NAMESPACES) ; do \
 		$(KUBECTL) create namespace $$v; \
@@ -134,36 +136,38 @@ k8s/debug: ##@cluster Delete kubernetes jetstack cert-manager
 .PHONY: tls/create-ca
 tls/create-ca: ##@tls Create self sign CA certs
 	@echo "Creating key"
-	$(OPENSSL) genrsa -des3 -out $(CA_TLS_KEY) 4096
-	$(OPENSSL) req -x509 -new -nodes -key $(CA_TLS_KEY) -sha256 -days 1024 -out $(CA_TLS_FILE)
+	$(OPENSSL) genrsa -out $(CA_TLS_KEY) 4096
+	$(OPENSSL) req -x509 -new -nodes -key $(CA_TLS_KEY) -sha256 -days 1024 -subj "/C=UK/ST=London/O=Issuing authority/OU=IT management" -out $(CA_TLS_FILE)
 	@echo "Created at: $(CA_TLS_FILE)"
 
-.PHONY: tls/create-certificate
+.PHONY: tls/create-cert
 tls/create-cert: ##@tls Create self sign certs for local machine
 	@echo "Creating self signed certificate"
-	MAIN_DOMAIN=$(shell echo $(DOMAINS) | awk '{print $$1}')
-	SAN=$(shell echo $(DOMAINS) | sed "s/^[^ ]* //")
-	$(OPENSSL) genrsa -out $(TLS_KEY) 2048
-	$(OPENSSL) req -new -sha256 \
-		-key mydomain.com.key \
-		-subj "/C=UK/ST=London/O=IT/CN=$$(MAIN_DOMAIN)" \
-		-reqexts SAN \
-		-config <(cat /etc/ssl/openssl.cnf \
-			<(printf "\n[SAN]\nsubjectAltName=DNS:mydomain.com,DNS:www.mydomain.com")) \
-		-out $(TLS_FILE)
-	@echo "Created at: $(TLS_FILE)"
+	$(OPENSSL) req -newkey rsa:2048 -nodes -keyout $(TLS_KEY) -subj "/C=UK/ST=London/L=London/O=Development/OU=IT/CN=$(MAIN_DOMAIN)" -out $(TLS_CSR)
+	$(OPENSSL) x509 -req -extfile <(printf "subjectAltName=$(SAN),DNS:localhost,DNS:127.0.0.1") -days 365 -signkey $(CA_TLS_KEY) -in $(TLS_CSR) -out $(TLS_FILE)
 
-.PHONY: tls/test
-tls/test: ##@tls Create self sign certs for local machine
+.PHONY: tls/show-ca
+tls/show-ca: ##@tls Show cert details
 	@echo "Creating self signed certificate"
-	@echo $(MAIN_DOMAIN)
-	@echo $(SAN)
-	@echo ok
+	$(OPENSSL) x509 -in $(CA_TLS_FILE) -text -noout
+
+.PHONY: tls/show-cert
+tls/show-cert: ##@tls Show cert details
+	@echo "Creating self signed certificate"
+	$(OPENSSL) x509 -in $(TLS_FILE) -text -noout
+
+.PHONY: tls/trust-cert
+tls/trust-cert: ##@tls Trust self signed cert by local browser
+	@echo "Import self signed cert into user's truststore"
+	@[ -d ~/.pki/nssdb ] || mkdir -p ~/.pki/nssdb
+	@certutil -d sql:$$HOME/.pki/nssdb -A -n '$(MAIN_DOMAIN) cert authority' -i $(CA_TLS_FILE) -t TCP,TCP,TCP
+	@certutil -d sql:$$HOME/.pki/nssdb -A -n '$(MAIN_DOMAIN)' -i $(TLS_FILE) -t P,P,P
+	@echo "Import successful..."
 
 ### CERT-MAN
 
-.PHONY: k8s/certman/install
-k8s/certman/install: ##@certman Install and configure kubernetes jetstack cert-manager
+.PHONY: k8s/certman/deploy
+k8s/certman/deploy: ##@certman Install and configure kubernetes jetstack cert-manager
 	@echo "Installing certificate managerk"
 	$(KUBECTL) apply -f https://github.com/jetstack/cert-manager/releases/download/v1.6.1/cert-manager.yaml
 	@echo "Waiting for the cert manager to deploy"
@@ -176,23 +180,23 @@ k8s/certman/delete: ##@certman Delete kubernetes jetstack cert-manager
 	$(KUBECTL) delete -f https://github.com/jetstack/cert-manager/releases/download/v1.6.1/cert-manager.yaml
 	@echo "Completed..."
 
-.PHONY: k8s/certman/create-ca-cert
-k8s/certman/create-ca-cert: ##@certman Create ca-cert in the namsepaces from localhost-ca and ca-key 
+.PHONY: k8s/certman/create-ca
+k8s/certman/create-ca: ##@certman Create ca-cert in the namsepaces from localhost-ca and ca-key 
 	@echo "Creating the secrets using the CA keypair in all namespaces"
 	@for v in $(NAMESPACES) ; do \
 		sudo $(KUBECTL) -n $$v create secret generic ca-key-pair --from-file=tls.crt=$(CA_TLS_FILE) --from-file=tls.key=$(CA_TLS_KEY); \
 	done
 	@echo "Completed..."
 
-.PHONY: k8s/certman/delete-ca-cert
-k8s/certman/delete-ca-cert	: ##@certman Install localhost.com ssl certs as a secret into namespaces
+.PHONY: k8s/certman/delete-ca
+k8s/certman/delete-ca: ##@certman Install localhost.com ssl certs as a secret into namespaces
 	@echo "Deleting ca certs from` secret"
 	@for v in $(NAMESPACES) ; do \
 		sudo $(KUBECTL) -n $$v delete secret ca-key-pair; \
 	done
 
-.PHONY: k8s/certman/issuer
-k8s/certman/issuer: ##@certman Create cert issuer inside the selected namsepace from localhost-ca and ca-key 
+.PHONY: k8s/certman/create-issuer
+k8s/certman/create-issuer: ##@certman Create cert issuer inside the selected namsepace from localhost-ca and ca-key 
 	@echo "Creating certificate issuer"
 	@for v in $(NAMESPACES) ; do \
 		$(KUBECTL) -n $$v apply -f ./etc/cert-manager.yaml; \
@@ -207,15 +211,15 @@ k8s/certman/delete-issuer: ##@certman Delete cert issuer inside the selected nam
 	done
 	@echo "Completed..."
 
-.PHONY: k8s/certman/create-domain-cert
-k8s/certman/create-domain-cert: ##@certman Install localhost.com ssl certs as a secret into namespaces
+.PHONY: k8s/certman/create-cert
+k8s/certman/create-cert: ##@certman Install localhost.com ssl certs as a secret into namespaces
 	@echo "Importing localhost.com certs as secret"
 	@for v in $(NAMESPACES) ; do \
 		sudo $(KUBECTL) -n $$v create secret generic tls-cert-key-pair --from-file=tls.crt=$(TLS_FILE) --from-file=tls.key=$(TLS_KEY) --from-file=ca.crt=$(CA_TLS_FILE); \
 	done
 	@echo "Completed..."
 
-.PHONY: k8s/certman/delete-domain-cert
+.PHONY: k8s/certman/delete-cert
 k8s/certman/delete-cert: ##@certman Install localhost.com ssl certs as a secret into namespaces
 	@echo "Deleting localhost.com certs as secret"
 	@for v in $(NAMESPACES) ; do \
@@ -228,16 +232,16 @@ k8s/certman/delete-cert: ##@certman Install localhost.com ssl certs as a secret 
 k8s/ingress/bindmainip: ##@ingress Change ingress to bind on the main ip only
 	$(KUBECTL) get -n ingress configmap nginx-load-balancer-microk8s-conf -o json > /tmp/nginx-load.json && jq --slurp 'reduce .[] as $$item ({}; . * $$item)' /tmp/nginx-load.json ./etc/k8s/bind-address.json | kubectl -n ingress apply -f - && rm -rf /tmp/nginx-load.json
 
-.PHONY: k8s/ingress/enableipforward
-k8s/ingress/enableipforward: ##@ingress Enable IP forwarding
+.PHONY: k8s/ingress/enableforward
+k8s/ingress/enableforward: ##@ingress Enable IP forwarding
 	$(KUBECTL) get -n ingress configmap nginx-load-balancer-microk8s-conf -o json > /tmp/nginx-load.json && jq --slurp 'reduce .[] as $$item ({}; . * $$item)' /tmp/nginx-load.json ./etc/k8s/ip-forward.json | kubectl -n ingress apply -f - && rm -rf /tmp/nginx-load.json
 
-.PHONY: k8s/ingress/allow-characters-in-annotations
-k8s/ingress/allow-characters-in-annotations: ##@ingress Enable some characters in ingress annotations
+.PHONY: k8s/ingress/fixingress
+k8s/ingress/fixingress: ##@ingress Enable some characters in ingress annotations
 	$(KUBECTL) get -n ingress configmap nginx-load-balancer-microk8s-conf -o json > /tmp/nginx-load.json && jq --slurp 'reduce .[] as $$item ({}; . * $$item)' /tmp/nginx-load.json ./etc/k8s/annotation-value-word-blocklist.json | kubectl -n ingress apply -f - && rm -rf /tmp/nginx-load.json
 
-.PHONY: k8s/ingress/fix-role-binding
-k8s/ingress/fix-role-binding: ##@ingress Enable some characters in ingress annotations
+.PHONY: k8s/ingress/fix-rolebind
+k8s/ingress/fix-rolebind: ##@ingress Enable some characters in ingress annotations
 	$(KUBECTL) get -n ingress role nginx-ingress-microk8s-role -o json > /tmp/nginx-load.json && jq --slurp 'reduce .[] as $$item ({}; . * $$item)' /tmp/nginx-load.json ./etc/k8s/configmap-update.json | kubectl -n ingress apply -f - && rm -rf /tmp/nginx-load.json
 
 
@@ -263,14 +267,6 @@ dashboard/portforward: ##@dashboard Port forward kubernetes dashboard
 	$(KUBECTL) port-forward -n kube-system service/kubernetes-dashboard 10443:443 --address 0.0.0.0
 
 ### MISC
-
-.PHONY: trust-self-signed-cert
-trust-self-signed-cert: ##@misc Trust self signed cert by local browser
-	@echo "Import self signed cert into user's truststore"
-	@[ -d ~/.pki/nssdb ] || mkdir -p ~/.pki/nssdb
-	@certutil -d sql:$$HOME/.pki/nssdb -A -n 'localhost.com cert authority' -i /etc/certs/localhost-ca.pem -t TCP,TCP,TCP
-	@certutil -d sql:$$HOME/.pki/nssdb -A -n 'localhost.com' -i /etc/certs/server.pem -t P,P,P
-	@echo "Import successful..."
 
 .PHONY: init
 init: k8s/create-namespaces k8s/certman/install k8s/certman/secret k8s/certman/issuer k8s/certman/install-cert sampledata dns/insert## Initialize the environment by creating cert manager
