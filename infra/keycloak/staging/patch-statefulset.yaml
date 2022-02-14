@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+spec:
+  template:
+    spec:
+      volumes:
+        - name: realm
+          secret:
+            secretName: keycloak-realm
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+spec:
+  template:
+    spec:
+      containers:
+      - name: keycloak
+        volumeMounts:
+        - name: realm
+          mountPath: /opt/jboss/realm
+          readOnly: true
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+spec:
+  template:
+    spec:
+      containers:
+      - name: keycloak
+        env:
+          - name: KEYCLOAK_IMPORT
+            value: /opt/jboss/realm/realm.json
+          - name: KEYCLOAK_FRONTEND_URL
+            value: https://login.localhost.com/auth

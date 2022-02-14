@@ -266,6 +266,59 @@ dashboard/token: ##@dashboard Enable kubernetes dashboard
 dashboard/portforward: ##@dashboard Port forward kubernetes dashboard 
 	$(KUBECTL) port-forward -n kube-system service/kubernetes-dashboard 10443:443 --address 0.0.0.0
 
+### Infra
+.PHONY: infra/mailhog/dryrun
+infra/mailhog/dryrun: ##@Infra deploy mailhog
+	$(KUBECTL) kustomize ./infra/mailhog/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/mailhog/deploy
+infra/mailhog/deploy: ##@Infra deploy mailhog
+	$(KUBECTL) -n keycloak-staging apply -k ./infra/mailhog/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/mailhog/delete
+infra/mailhog/delete: ##@Infra delete mailhog
+	$(KUBECTL) -n keycloak-staging delete -k ./infra/mailhog/staging
+	@echo "Delete completed..."
+
+.PHONY: infra/db/dryrun
+infra/db/dryrun: ##@Infra deploy postgre
+	$(KUBECTL) kustomize ./infra/postgre/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/db/deploy
+infra/db/deploy: ##@Infra deploy postgre
+	$(KUBECTL) -n keycloak-staging apply -k ./infra/postgre/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/db/delete
+infra/db/delete: ##@Infra delete postgre
+	$(KUBECTL) -n keycloak-staging delete -k ./infra/postgre/staging
+	@echo "Delete completed..."
+
+.PHONY: infra/keycloak/dryrun
+infra/keycloak/dryrun: ##@Infra deploy keycloak
+	$(KUBECTL) kustomize ./infra/keycloak/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/keycloak/deploy
+infra/keycloak/deploy: ##@Infra deploy keycloak
+	$(KUBECTL) -n keycloak-staging apply -k ./infra/keycloak/staging
+	@echo "Deploy completed..."
+
+.PHONY: infra/keycloak/delete
+infra/keycloak/delete: ##@Infra delete keycloak
+	$(KUBECTL) -n keycloak-staging delete -k ./infra/keycloak/staging
+	@echo "Delete completed..."
+
+### Stack
+.PHONY: stack/deploy
+stack/deploy: ##@Stack deploy stack
+	$(KUBECTL) kustomize ./stack/staging
+	$(KUBECTL) apply -k ./stack/staging
+	@echo "Deploy completed"
+
 ### MISC
 
 .PHONY: init

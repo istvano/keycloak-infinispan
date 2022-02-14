@@ -1,0 +1,172 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+spec:
+  selector: {}
+  replicas: 2
+  serviceName: keycloak-headless
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        checksum/config-startup: dc1c28e62927de272accd01fe42a7044ec37f448b6a1ced1a94900338787ec95
+    spec:
+      initContainers:
+        - name: pgchecker
+          image: "docker.io/busybox:1.32"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          command:
+            - sh
+            - -c
+            - |
+              echo 'Waiting for PostgreSQL to become ready...'
+
+              until printf "." && nc -z -w 2 keycloak-postgresql 5432; do
+                  sleep 2;
+              done;
+
+              echo 'PostgreSQL OK ✓'
+          resources:
+            limits:
+              cpu: 20m
+              memory: 32Mi
+            requests:
+              cpu: 20m
+              memory: 32Mi
+      containers:
+        - name: keycloak
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+          image: "docker.io/jboss/keycloak:16.1.1"
+          imagePullPolicy: IfNotPresent
+          command:
+            []
+          args:
+            - -Dkeycloak.profile.feature.docker=enabled -Dkeycloak.profile.feature.admin_fine_grained_authz=enabled -Dkeycloak.profile.feature.token_exchange=enabled
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: JAVA_OPTS
+              value: >-
+                -server
+                -Xms64m -Xmx512m
+                -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m
+                -Djava.net.preferIPv4Stack=true
+                -Djboss.modules.system.pkgs=org.jboss.byteman --add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED --add-exports=jdk.unsupported/sun.reflect=ALL-UNNAMED
+                -Djava.awt.headless=true
+                -Djboss.default.jgroups.stack=kubernetes
+                -Djboss.node.name=$(POD_NAME)
+                -Djboss.tx.node.id=$(POD_NAME)
+                -Djboss.site.name=$(POD_NAMESPACE)
+                -Djboss.default.multicast.address=230.0.0.5
+                -Djboss.modcluster.multicast.address=224.0.1.106
+                -Djboss.as.management.blocking.timeout=3600
+            - name: DB_VENDOR
+              value: postgres
+            - name: DB_ADDR
+              value: keycloak-postgresql
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_DATABASE
+              value: "keycloak"
+            - name: DB_USER
+              value: "keycloak"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-postgresql
+                  key: postgresql-password
+            - name: ROOT_LOGLEVEL
+              value: INFO
+            - name: KEYCLOAK_LOGLEVEL
+              value: INFO
+            - name: WILDFLY_LOGLEVEL
+              value: INFO
+            - name: CACHE_OWNERS_COUNT
+              value: "2"
+            - name: CACHE_OWNERS_AUTH_SESSIONS_COUNT
+              value: "2"
+            - name: PROXY_ADDRESS_FORWARDING
+              value: "true"
+            - name: KEYCLOAK_USER_FILE
+              value: /secrets/username
+            - name: KEYCLOAK_PASSWORD_FILE
+              value: /secrets/password
+            - name: JGROUPS_DISCOVERY_PROTOCOL
+              value: "dns.DNS_PING"
+            - name: JGROUPS_DISCOVERY_PROPERTIES
+              value: "dns_query=keycloak-headless"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: http-management
+              containerPort: 9990
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /auth/
+              port: http
+            initialDelaySeconds: 0
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /auth/realms/master
+              port: http
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+          startupProbe:
+            httpGet:
+              path: /auth/
+              port: http
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+            failureThreshold: 60
+            periodSeconds: 5
+          resources:
+            {}
+          volumeMounts:
+            - name: startup
+              mountPath: "/opt/jboss/startup-scripts/keycloak.cli"
+              subPath: "keycloak.cli"
+              readOnly: true
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
+      serviceAccountName: keycloak
+      securityContext:
+        fsGroup: 1000
+      enableServiceLinks: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: startup
+          configMap:
+            name: keycloak-startup
+            defaultMode: 0555
+            items:
+              - key: keycloak.cli
+                path: keycloak.cli
+        - name: secrets
+          secret:
+            secretName: keycloak-credentials

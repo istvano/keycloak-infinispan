@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-startup
+data:
+  keycloak.cli: |
+    embed-server --server-config=standalone-ha.xml --std-out=echo
+    batch
+
+    echo Configuring node identifier
+
+    ## Sets the node identifier to the node name (= pod name). Node identifiers have to be unique. They can have a
+    ## maximum length of 23 characters. Thus, the chart's fullname template truncates its length accordingly.
+    /subsystem=transactions:write-attribute(name=node-identifier, value=${jboss.node.name})
+
+    # Allow log level to be configured via environment variable
+    /subsystem=logging/console-handler=CONSOLE:write-attribute(name=level, value=${env.WILDFLY_LOGLEVEL:INFO})
+    /subsystem=logging/root-logger=ROOT:write-attribute(name=level, value=${env.WILDFLY_LOGLEVEL:INFO})
+
+    # Log only to console
+    /subsystem=logging/root-logger=ROOT:write-attribute(name=handlers, value=[CONSOLE])
+
+    echo Finished configuring node identifier
+
+    run-batch
+    stop-embedded-server

@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonLabels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: keycloak
+    app.kubernetes.io/version: "16.1.1"
+generatorOptions:
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: keycloak
+    app.kubernetes.io/version: "16.1.1"
+secretGenerator:
+  - name: keycloak-credentials
+    envs:
+    - assets/keycloak.env
+  - name: keycloak-realm
+    files:
+    - assets/realm.json
+# configMapGenerator:
+#   - name: api
+#     envs:
+#     - conf/api.env
+patchesStrategicMerge:
+  - patch-statefulset.yaml
+resources:
+  - statefulset.yaml
+  - serviceaccount.yaml
+  - service-http.yaml
+  - service-headless.yaml
+  - ingress.yaml
+  - configmap-startup.yaml

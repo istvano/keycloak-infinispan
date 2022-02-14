@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak
+  annotations:
+    #cert-manager.io/cluster-issuer: "ca"
+    kubernetes.io/tls-acme: "true"
+spec:
+  tls:
+    - secretName: keycloak-tls
+      hosts:
+        - sso.localhost.com
+  rules:
+    - host: sso.localhost.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak-http
+                port:
+                  name: http
